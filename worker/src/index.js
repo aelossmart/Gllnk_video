@@ -364,14 +364,15 @@ function pickComment(parsed, plats) {
 }
 
 /**
- * 清理超过 RETENTION_DAYS 天的素材（inbox/ 、articles/ 、docs/ 三条线）。
+ * 清理超过 RETENTION_DAYS 天的素材（inbox/ 、articles/ 两条线）。
+ * docs/（中视频文稿）长期保留，不参与清理。
  * 以对象上传时间为准；dry=true 时只统计不删除。
  */
 async function cleanupOldObjects(env, dry = false) {
   const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
   let scanned = 0;
   const expiredKeys = [];
-  for (const prefix of [PREFIX + "/", ARTICLE_PREFIX + "/", DOC_PREFIX + "/"]) {
+  for (const prefix of [PREFIX + "/", ARTICLE_PREFIX + "/"]) {
     let cursor;
     do {
       const res = cursor
