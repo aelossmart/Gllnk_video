@@ -66,13 +66,55 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
-function authorized(request, env) {
-  const expected = env.WORKER_API_TOKEN;
-  if (!expected) return false;
-  const header = request.headers.get("authorization") || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  return safeEqual(token, expected);
+// Noah 版：多 Token + 浏览器 Cookie 登录
+// WORKER_API_TOKEN：旧的单个 Token，仍可用，身份记为 default
+// WORKER_API_TOKENS：多个 Token，逗号分隔，格式 name:token，例如 muse:AAA,antigravity:BBB
+// 不同 Agent（Muse / Antigravity 等）用不同 Token，吊销一个不用全换。上传时记录的 source 就是这里的 name。
+// 浏览器看板：POST /api/login 提交 Token，成功后服务器发 Cookie，之后看板/下载都认 Cookie，不用把 Token 拼在 URL 里。
+function parseTokens(env) {
+  const list = [];
+  if (env.WORKER_API_TOKEN) list.push({ name: "default", token: String(env.WORKER_API_TOKEN) });
+  if (env.WORKER_API_TOKENS) {
+    for (const part of String(env.WORKER_API_TOKENS).split(",")) {
+      const p = part.trim();
+      if (!p) continue;
+      const i = p.indexOf(":");
+      if (i > 0) list.push({ name: p.slice(0, i).trim(), token: p.slice(i + 1).trim() });
+      else list.push({ name: "token", token: p });
+    }
+  }
+  return list;
 }
+function getCookie(request, name) {
+  const raw = request.headers.get("cookie") || "";
+  for (const part of raw.split(";")) {
+    const kv = part.trim().split("=");
+    if (kv[0] === name) return decodeURIComponent(kv.slice(1).join("=") || "");
+  }
+  return "";
+}
+function authIdentity(request, env) {
+  const tokens = parseTokens(env);
+  if (!tokens.length) return null;
+  const header = request.headers.get("authorization") || "";
+  const bearer = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (bearer) {
+    for (const t of tokens) if (safeEqual(bearer, t.token)) return { name: t.name, via: "bearer" };
+    return null;
+  }
+  const cookie = getCookie(request, "cunfetch_token");
+  if (cookie) {
+    for (const t of tokens) if (safeEqual(cookie, t.token)) return { name: t.name, via: "cookie" };
+  }
+  return null;
+}
+function authorized(request, env) {
+  return !!authIdentity(request, env);
+}
+function loginPage() {
+  return "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>CunFetch 私有看板</title></head><body style=\"font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;max-width:420px;margin:80px auto;padding:0 16px;\"><h2>CunFetch 私有看板</h2><p style=\"color:#666;\">这个看板已改为私有，只有持有 Token 的人能看和下载。请输入你在 Cloudflare 里设的 Token。</p><form method=\"post\" action=\"/api/login\"><input type=\"password\" name=\"token\" placeholder=\"输入 Token\" style=\"width:100%;padding:10px;box-sizing:border-box;\" required><button style=\"margin-top:12px;padding:10px 18px;\">登录看板</button></form><p style=\"color:#999;font-size:13px;\">登录后 Token 只存在你浏览器的 Cookie 里，不会显示在页面上。退出请访问 /api/logout。</p></body></html>";
+}
+
 
 function sanitizeSlug(raw) {
   const slug = String(raw || "")
@@ -216,7 +258,8 @@ async function readUploadMultipart(request) {
   return { type: "video", slug, slot: slotRaw, date, parts };
 }
 
-async function handleUpload(request, env) {
+async function handleUpload(request, env, ident) {
+  const source = (ident && ident.name) || 'unknown';
   let parsed;
   try {
     parsed = await readUploadMultipart(request);
@@ -232,7 +275,7 @@ async function handleUpload(request, env) {
     await env.INBOX.put(`${base}/${safeName}`, mdText, {
       httpMetadata: { contentType: "text/markdown; charset=utf-8" },
     });
-    const payload = { ...doc, original: safeName, uploaded_at: new Date().toISOString() };
+    const payload = { ...doc, original: safeName, uploaded_at: new Date().toISOString(), source };
     await env.INBOX.put(`${base}/doc.json`, JSON.stringify(payload), {
       httpMetadata: { contentType: "application/json" },
     });
@@ -271,7 +314,7 @@ async function handleUpload(request, env) {
       written.push({ key, etag: put.httpEtag || put.etag });
     }
     if (written.length === 0) return json({ ok: false, error: "zip 内没有可用文件" }, 400);
-    const meta = { title, original: zipName, slug, slot, date, uploaded_at: new Date().toISOString() };
+    const meta = { title, original: zipName, slug, slot, date, uploaded_at: new Date().toISOString(), source };
     const mp = await env.INBOX.put(`${base}/meta.json`, JSON.stringify(meta), {
       httpMetadata: { contentType: "application/json" },
     });
@@ -288,7 +331,8 @@ async function handleUpload(request, env) {
     });
     written.push({ key, etag: put.httpEtag || put.etag });
   }
-  return json({ ok: true, type: "video", slug, slot, date, files: written });
+  await env.INBOX.put(`${PREFIX}/${date}/${slot}/${slug}/meta.json`, JSON.stringify({ source, slug, slot, date, uploaded_at: new Date().toISOString() }), { httpMetadata: { contentType: "application/json" } });
+  return json({ ok: true, type: "video", slug, slot, date, source, files: written });
 }
 
 async function handleFeedback(request, env) {
@@ -465,9 +509,13 @@ async function collectBucket(env) {
           entry.platforms = Object.keys(platforms).length ? platforms : null;
           try {
             const mj = await env.INBOX.get(`${base}/meta.json`);
-            if (mj) entry.title = (JSON.parse(await mj.text()).title) || "";
+            if (mj) { const m = JSON.parse(await mj.text()); entry.title = m.title || ""; entry.source = m.source || null; }
           } catch (e) { /* ignore */ }
         } else {
+          try {
+            const vm = await env.INBOX.get(`${base}/meta.json`);
+            if (vm) entry.source = (JSON.parse(await vm.text()).source) || null;
+          } catch (e) { /* ignore */ }
           // 视频线：platforms.json → title + 三平台标题/标签
           try {
             const pj = await env.INBOX.get(`${base}/platforms.json`);
@@ -517,6 +565,30 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     const origin = `${url.protocol}//${url.host}`;
+    if (path === "/api/login" && request.method === "POST") {
+      let token = "";
+      try {
+        const form = await request.formData();
+        token = String(form.get("token") || "");
+      } catch (e) { /* ignore */ }
+      const tokens = parseTokens(env);
+      const hit = tokens.find((t) => safeEqual(token, t.token));
+      if (!hit) return new Response(loginPage(), { status: 401, headers: { "content-type": "text/html; charset=utf-8" } });
+      return new Response(null, {
+        status: 303,
+        headers: {
+          location: "/",
+          "set-cookie": `cunfetch_token=${encodeURIComponent(token)}; Path=/; Max-Age=2592000; SameSite=Lax; Secure`,
+        },
+      });
+    }
+    if (path === "/api/logout") {
+      return new Response(null, {
+        status: 303,
+        headers: { location: "/", "set-cookie": "cunfetch_token=; Path=/; Max-Age=0; SameSite=Lax" },
+      });
+    }
+
 
     if (path === "/api/health") {
       return json({ ok: true, time: new Date().toISOString() });
@@ -530,6 +602,7 @@ export default {
 
     // 文件下载：/media/<完整对象键>（inbox/... 或 articles/...）
     if (path.startsWith("/media/")) {
+      if (!authorized(request, env)) return json({ ok: false, error: "未授权：看板和下载已改为私有，请先登录" }, 401);
       const key = decodeURIComponent(path.slice("/media/".length));
       const obj = await env.INBOX.get(key);
       if (!obj) return json({ ok: false, error: "文件不存在: " + key }, 404);
@@ -547,6 +620,9 @@ export default {
       if (path === "/api/objects" && !authorized(request, env)) {
         return json({ ok: false, error: "未授权" }, 401);
       }
+      if (path === "/" && !authorized(request, env)) {
+        return new Response(loginPage(), { status: 401, headers: { "content-type": "text/html; charset=utf-8" } });
+      }
       const root = await collectBucket(env);
       if (path === "/api/objects") return json({ ok: true, items: root });
       return new Response(renderDashboard(root, origin), {
@@ -556,6 +632,9 @@ export default {
 
     // 中视频文稿页（公开，与看板一致）
     if (path === "/video-doc") {
+      if (!authorized(request, env)) {
+        return new Response(loginPage(), { status: 401, headers: { "content-type": "text/html; charset=utf-8" } });
+      }
       const docs = await collectDocs(env);
       return new Response(renderVideoDoc(docs), {
         headers: { "content-type": "text/html; charset=utf-8" },
@@ -563,8 +642,9 @@ export default {
     }
 
     if (path === "/api/upload" && request.method === "POST") {
-      if (!authorized(request, env)) return json({ ok: false, error: "未授权" }, 401);
-      return handleUpload(request, env);
+      const ident = authIdentity(request, env);
+      if (!ident) return json({ ok: false, error: "未授权" }, 401);
+      return handleUpload(request, env, ident);
     }
 
     if (path === "/api/feedback" && request.method === "POST") {

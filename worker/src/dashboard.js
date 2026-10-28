@@ -132,7 +132,7 @@ export function renderDashboard(root, baseUrl) {
     douyin: "抖音", bilibili: "B站", shipinhao: "视频号",
     wechat: "公众号", xiaohongshu: "小红书", toutiao: "头条", baijiahao: "百家号", zhihu: "知乎",
   };
-  const VIDEO_PLATFORMS = ["douyin", "bilibili", "shipinhao"];
+  const VIDEO_PLATFORMS = ["douyin", "xiaohongshu", "bilibili", "shipinhao"];
   const ARTICLE_PLATFORMS = ["wechat", "xiaohongshu", "toutiao", "baijiahao", "zhihu"];
   const rows = [];
   const dates = Object.keys(root || {}).sort().reverse();
@@ -153,7 +153,7 @@ export function renderDashboard(root, baseUrl) {
           hasVideo, hasPlatforms,
           platforms: entry.platforms || null,
           comment: (entry.comment || "").trim(),
-          downloaded: Boolean(st.downloaded), pull_at: st.pull_at || null,
+          downloaded: Boolean(st.downloaded), pull_at: st.pull_at || null, source: entry.source || null,
         });
       }
     }
@@ -204,7 +204,7 @@ export function renderDashboard(root, baseUrl) {
           <div class="meta">
             <span class="date">${r.date}</span>
             <span class="slotchip">${SLOT_LABEL[r.slot] || r.slot}</span>
-            ${kindChip}
+            ${kindChip} ${r.source ? '<span class="chip">来源 ' + escHtml(r.source) + '</span>' : ''}
             <span class="slug">${escHtml(r.slug)}</span>
             ${dl}
             <span class="pull">${r.pull_at ? ("下载于 " + r.pull_at.replace("T", " ").slice(0, 19)) : "-"}</span>
