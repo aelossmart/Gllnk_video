@@ -1,73 +1,69 @@
-# ============================================================
-# CunFetch 配置文件模板
-# 复制为 config.yaml 并按实际情况填写。
-# 注意：config.yaml 和任何含密钥的文件都加入 .gitignore，
-#       绝对不能提交到 GitHub。
-# ============================================================
+# CunFetch - Noah 版配置（已清理作者硬编码）
+# 注意：这个文件里不要填任何 Token / 密钥。
+# Token 只放在 Cloudflare Worker 的 Secret 里，本地拉取时用环境变量或命令行传入，
+# 绝不要把 Token 写进这个文件再提交到 GitHub。
 
-# ----- 博客信息 -----
+# ----- 博客采集：Noah 版默认关闭 -----
+# 作者原版是采他自己的博客 cunzhangblog.com，写进他自己的 Google Sheets。
+# 那条线和你的抖音/小红书没有关系，默认关掉。
+# 如果你以后有了自己的博客，再把 url 换成你自己的，并把 use_rss 改回 true。
 blog:
-  url: "https://www.cunzhangblog.com"
-  rss: "https://www.cunzhangblog.com/rss.xml"          # 优先使用 RSS
-  sitemap: "https://www.cunzhangblog.com/sitemap.xml"  # 有 RSS 时可选
-  use_rss: true      # true = 用 RSS；false = 用 sitemap
-  use_sitemap: false # 是否同时用 sitemap 兜底检测
+  url: ""
+  rss: ""
+  sitemap: ""
+  use_rss: false
+  use_sitemap: false
 
 # ----- 本地素材存储 -----
+# 这是你自己 Windows 电脑上的落盘目录，D 盘不存在就改成你实际的盘符/目录。
 storage:
   root: "D:/CunContent"
-  log_dir: "logs"        # 相对 CunFetch 运行目录，或绝对路径
+  log_dir: "logs"
 
-# ----- 图片采集 -----
+# ----- 图片采集（博客线关闭时用不到，留空即可） -----
 images:
-  target_count: 5                  # 每篇文章目标图片数
-  allowed_formats:
-    - jpg
-    - jpeg
-    - png
-    - webp
-  min_dimension: 100               # 过滤小于该尺寸的图
-  min_file_bytes: 1024             # 过滤小于该大小的文件
-  download_retries: 3              # 单图下载重试次数
-  download_timeout_seconds: 15     # 单图下载超时
-  # 网络补充图片搜索（不足 5 张时）。
-  # 填好某个 provider 的 key 才会启用，否则跳过网络搜索。
+  target_count: 5
+  allowed_formats: [jpg, jpeg, png, webp]
+  min_dimension: 100
+  min_file_bytes: 1024
+  download_retries: 3
+  download_timeout_seconds: 15
   searcher:
-    provider: "none"   # none | bing | google_cse
-    bing:
-      api_key: ""      # bing 需要
-    google_cse:
-      api_key: ""      # google_cse 需要
-      cx: ""
+    provider: "none"
+    bing: { api_key: "" }
+    google_cse: { api_key: "", cx: "" }
 
-# ----- 任务队列 -----
+# ----- 任务队列：Noah 版默认不接作者的表 -----
+# 只有你想用 Google Sheets 做任务队列时，才填你自己的表 ID 和你自己的 Service Account。
+# 只用 Worker 收件箱（Muse/Antigravity 上传 -> 看板 -> 本地拉取）时，这一段可以全空。
 sheets:
-  spreadsheet_id: "1k6iko5SrU36jrKaHZoH_Yam9Z_KAK63u32uf964zKM4"
+  spreadsheet_id: ""
   sheet_name: "CunFetch Tasks"
-  # 本机 Service Account 授权 JSON 路径（用于本地 CunFetch 读取/更新）
   credentials_path: "D:/CunContent/credentials/service-account.json"
-  # GitHub Actions 侧用于写入任务的密钥（环境变量中的 JSON 字符串）
   credentials_env: "CUNFETCH_SHEETS_CREDENTIALS"
 
-# ----- 网络请求通用 -----
 network:
   timeout_seconds: 30
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-  # 可选：外网代理（访问 Google、网络图片搜索等被挡可填）。如：
-  #   proxy: "http://127.0.0.1:10808"
-  #   proxy: "socks5h://127.0.0.1:10809"
   proxy: ""
 
-# ----- 日志 -----
 logging:
-  level: "INFO"   # DEBUG | INFO | WARNING | ERROR
+  level: "INFO"
 
-# ----- 计划 -----
 schedule:
   timezone: "Asia/Shanghai"
   time: "09:05"
 
-# ----- 其它 -----
-runner:
-  # 发布到 GitHub Actions 的 cron（UTC 时间）
-  detached_cron_utc: "0 1 * * *"
+# ----- 4 平台（Noah 版） -----
+# 视频线原来只有抖音/B站/视频号，现在加上小红书，一共 4 个。
+# platforms.json 里就要按这 4 个键写标题和标签，缺哪个，看板上那个就不显示。
+platforms: ["douyin", "xiaohongshu", "bilibili", "shipinhao"]
+
+# ----- R2 / Worker（部署后填） -----
+# worker_base_url：部署后 Cloudflare 打印的地址，例如 https://cunfetch.<你的子域名>.workers.dev
+# worker_token：不要写在这里！拉取脚本用环境变量 CUNFETCH_TOKEN 或命令行 --token 传入。
+r2:
+  worker_base_url: ""
+  worker_token: ""
+  bucket: "cunfetch-inbox"
+  prefix: "inbox"
